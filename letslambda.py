@@ -14,7 +14,10 @@ import pytz
 import re
 import requests
 import socket
-import StringIO
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
 import threading
 import time
 import yaml
@@ -22,7 +25,7 @@ from acme import challenges
 from acme import client
 from acme import errors
 from acme import messages
-from acme.jose.util import ComparableX509
+from josepy.util import ComparableX509
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from Crypto import Random
@@ -275,7 +278,7 @@ def update_cf_server_certificate(conf, domain, cf_id, server_certificate_id):
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchDistribution':
             return False
-        print e
+        print (e)
 
     if res['Distribution']['Status'] != 'Deployed':
         logger.error("[main] Could not set server certificate '{0}' on CloudFront distribution {1} as the current status is '{2}'.".format(server_certificate_id, cf_id, res['Distribution']['Status']))
@@ -360,6 +363,9 @@ def save_to_s3(conf, s3_key, content, encrypt=False, kms_key='AES256'):
     """
     Save the rsa key in PEM format to s3 .. for later use
     """
+    if s3_key.startswith(('*')):
+        s3_key = 'star' + s3_key[1:]
+
     logger.debug("[main] Saving object '{0}' to in 's3://{1}'".format(s3_key, conf['s3_bucket']))
     s3 = conf['s3_client']
     kwargs = {
@@ -384,14 +390,14 @@ def save_to_s3(conf, s3_key, content, encrypt=False, kms_key='AES256'):
 
 def load_private_key(conf, domain):
     key = None
-    s3_key = domain['base_path'] + domain['name'] + ".key." + conf['extension']
+    s3_key = domain.get('base_path','') + domain['name'] + ".key." + conf.get('extension','')
 
     if 'reuse_key' in domain.keys() and domain['reuse_key'] == True:
         logger.debug("[main] Attempting to load private key from S3 '{0}' for domain '{1}'".format(s3_key, domain['name']))
         key = load_from_s3(conf, s3_key)
 
     if key == None:
-        key = create_and_save_key(conf, s3_key, domain['kmsKeyArn'], domain['key_size'])
+        key = create_and_save_key(conf, s3_key, domain.get('kmsKeyArn', 'AES256'), domain.get('key_size', 2048))
 
     return crypto.load_privatekey(crypto.FILETYPE_PEM, key)
 
@@ -414,17 +420,21 @@ def load_certificate(conf, domain):
     return crypto.load_certificate(crypto.FILETYPE_PEM, certificate_pem)
 
 def is_certificate_expired(conf, domain, certificate):
-    interval = domain['renew_before_expiry']
+    try:
+        interval = domain['renew_before_expiry']
+    except:
+        interval = "30 days"
+        
     target_expiry = pytz.UTC.localize(datetime.strptime(certificate.get_notAfter().decode('ascii'), '%Y%m%d%H%M%SZ'))
     now = pytz.UTC.fromutc(datetime.utcnow())
 
     days_left = (datetime.strptime(certificate.get_notAfter().decode('ascii'), '%Y%m%d%H%M%SZ') - datetime.utcnow()).days
 
     if target_expiry < add_time_interval(now, interval):
-        logger.info("[main] Certificate for domain '{0}' within expiry interval ({1} days left).".format(domain['name'], days_left))
+        logger.info("[main] Certificate for domain '{0}' within expiry interval ({1} days left).".format(certificate.get_subject(), days_left))
         return True
 
-    logger.info("[main] Certificate for domain '{0}' NOT within expiry interval ({1} days left).".format(domain['name'], days_left))
+    logger.info("[main] Certificate for domain '{0}' NOT within expiry interval ({1} days left).".format(certificate.get_subject().CN, days_left))
     return False
 
 def generate_certificate_signing_request(conf, domain):
