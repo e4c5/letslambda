@@ -223,3 +223,12 @@ def _wait_letsencrypt_record_insync(logger, conf, r53_status):
     logger.debug("[route53] Route53 synchronized in {0:d} seconds.".format(60-timeout))
     return True
 
+def get_hosted_zones(logger, conf):
+    zones = []
+    r53 = boto3.client('route53', config=Config(signature_version='v4', region_name=conf['region']))
+    for zone in r53.list_hosted_zones()['HostedZones']:
+        zones.append(zone['Name'])
+    
+    
+    return zones
+    
